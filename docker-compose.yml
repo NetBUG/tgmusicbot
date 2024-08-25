@@ -1,0 +1,14 @@
+version: "3"
+services:
+  nginx:
+    image: tgmusicbot:latest
+    container_name: tgmusicbot
+    # network_mode: "host"
+    env_file: .env
+    ports:
+      - "4001:80"
+    volumes:
+      - type: bind
+        source: /media/Magic/netbug/Music/ARTISTS
+        target: /media
+    restart: always
