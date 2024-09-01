@@ -17,7 +17,7 @@ if not TOKEN:
 bot = telebot.TeleBot(TOKEN, parse_mode="MARKDOWN") # You can set parse_mode by default. HTML or MARKDOWN
 
 # See https://github.com/Delgan/loguru?tab=readme-ov-file#easier-file-logging-with-rotation-retention-compression
-logger.add("file_{time}.log", format="{time} {level} {message}") # , compression="zip"
+logger.add("/tmp/log/file_{time}.log", format="{time} {level} {message}") # , compression="zip"
 
 logger.info("Started bot!")
 
