@@ -5,7 +5,7 @@ ARG TG_TOKEN
 
 WORKDIR /app
 
-COPY requirements.txt
+COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache python3.12 -m pip install -r /app/requirements.txt
 
 COPY . .
