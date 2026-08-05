@@ -9,6 +9,7 @@ from loguru import logger
 from tgmusicbot.bot.handlers import build_app
 from tgmusicbot.config import Config
 from tgmusicbot.errors import ConfigError
+from tgmusicbot.logsetup import configure_telebot_logging
 
 
 def main() -> int:
@@ -27,6 +28,7 @@ def main() -> int:
             retention=5,
         )
 
+    configure_telebot_logging()
     config.library_root.mkdir(parents=True, exist_ok=True)
     build_app(config).run()
     return 0
