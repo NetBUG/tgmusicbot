@@ -318,8 +318,62 @@ file → "no artist tag" → typed answer → "no album tag" → typed answer �
 the `Singles` button path and rejection of a non-allowlisted user. Not verified
 against a live Telegram token.
 
-Next: Phase 1 (`/tags`), which is also where the real keyboards and wording get
-designed.
+**Phase 1 implemented (2026-08-05).** Tag repair, 180 tests total.
+
+| File | Contents |
+|---|---|
+| `tgmusicbot/encoding.py` | mojibake repair with a scorer that refuses false positives |
+| `tgmusicbot/tagfix.py` | `Source` (tags/directory/filename), `Proposal`, `apply()` + JSON backup |
+| `tgmusicbot/tagservice.py` | `/tags` as a job; buttons carry only the job id |
+| `tags.write_tags` | ID3v2.4/UTF-8 with `v1=0`, Vorbis, MP4; `n/total` |
+| `naming.parse_album_dirname` | `"Pink Floyd - Meddle (1971)"` → artist/album/year |
+| `library.resolve` | user path → path proven to be inside the root |
+
+The scorer is the interesting part. Three signals separate mojibake from
+ordinary text: letters outside ASCII-plus-Cyrillic, scripts mixed inside one
+word, and capitals in the middle of a word. A candidate must beat the original
+by a margin before it is proposed. This is what stops the classic false
+positive: `Sigur Rós` round-trips into the entirely plausible `Sigur Rуs`
+(Cyrillic *у*), and the mixed-script penalty rejects it. Verified against
+`Motörhead`, `Blue Öyster Cult`, `Beyoncé`, `Erik Satie – Gymnopédie No.1`,
+`AC/DC` — all untouched — and both mojibake forms of `Пинк Флойд` — both
+repaired.
+
+Deviations from the plan, both deliberate:
+
+- **`.tags-backup.json` lives in the target directory, not "alongside" each
+  file**, and is an append-only list of runs with `before`/`after` per track.
+  One dotfile per album beats one per track, and scanners skip dotfiles.
+- **No `--dry-run` flag.** The proposal *is* the dry run: `propose()` cannot
+  write, and only the Apply button reaches `apply()`. A flag would have been a
+  second way to express the same thing.
+
+Real-file round-trips are tested without fixtures or ffmpeg (neither is on this
+box): a bare MPEG-1 Layer III stream and a bare FLAC STREAMINFO block are
+synthesised in-process, which is enough for mutagen to attach tags to.
+
+Verified: full suite green; a stubbed end-to-end `/tags` run over two real MP3s
+tagged `Ïèíê Ôëîéä` produced the diff, the four buttons, and after Apply the
+files read back as `Пинк Флойд` with `total_tracks=2` and a backup written.
+Still not verified against a live Telegram token.
+
+**Fixes from the first live run (2026-08-05).**
+
+* `logsetup.py` — telebot answered every long-polling read timeout with two full
+  tracebacks (the exception, then the same traceback again as a separate record).
+  Transient failures now collapse to one line, `telebot: reconnecting to Telegram
+  (read timeout)`, repeats of the same reason are suppressed for 60 s and the next
+  line says how many were swallowed. Genuine errors pass through untouched.
+* `bot/download.py` — the progress message could only ever read `download... ?%`:
+  `TeleBot.download_file` returns the whole file as `bytes` and reports nothing on
+  the way. The file is now streamed through `ProgressStream` straight into
+  `MediaLibrary.stage()`, so there is a real percentage
+  (`Downloading ████████░░░░ 67% of 3.0 MB`) and the file never sits in RAM whole.
+  A network failure becomes `SourceUnavailable`, not a bare traceback.
+* The stage name was a raw internal word (`download`) leaking into the UI; it is a
+  catalogue key now, like everything else the user sees.
+
+Next: Phase 2 (YouTube via yt-dlp), which needs ffmpeg in the image.
 
 Open questions:
 - rutracker credentials still to be provided

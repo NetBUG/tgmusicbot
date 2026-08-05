@@ -3,3 +3,5 @@
 loguru>=0.7.0,<1.0.0
 pyTelegramBotAPI>=4.29,<5.0
 mutagen>=1.47
+# used directly for streaming Bot API file downloads
+requests>=2.31

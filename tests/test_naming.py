@@ -90,3 +90,22 @@ def test_format_track_filename_keeps_component_within_limit():
     name = naming.format_track_filename("я" * 300, ".flac", 1)
     assert len(name.encode("utf-8")) <= naming.MAX_COMPONENT_BYTES
     assert name.endswith(".flac")
+
+
+@pytest.mark.parametrize(
+    "dirname,album,artist,year",
+    [
+        ("Meddle", "Meddle", None, None),
+        ("Meddle (1971)", "Meddle", None, 1971),
+        ("Meddle [1971]", "Meddle", None, 1971),
+        ("1971 - Meddle", "Meddle", None, 1971),
+        ("1971 Meddle", "Meddle", None, 1971),
+        ("Pink Floyd - Meddle (1971)", "Meddle", "Pink Floyd", 1971),
+        ("Pink_Floyd_-_Meddle", "Meddle", "Pink Floyd", None),
+        ("2001: A Space Odyssey", "2001: A Space Odyssey", None, None),
+        ("Greatest Hits 2", "Greatest Hits 2", None, None),
+    ],
+)
+def test_parse_album_dirname(dirname, album, artist, year):
+    parsed = naming.parse_album_dirname(dirname)
+    assert (parsed.album, parsed.artist, parsed.year) == (album, artist, year)

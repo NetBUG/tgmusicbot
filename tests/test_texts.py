@@ -88,3 +88,28 @@ def test_missing_key_and_missing_param_are_visible_not_silent():
 def test_catalogue_templates_are_all_formattable():
     for key, template in texts.CATALOGUE.items():
         assert "{{" not in template, key
+
+
+def test_every_key_the_tag_flow_can_emit_has_a_string():
+    from tgmusicbot import tagservice
+
+    keys = {
+        option.key
+        for option in (
+            tagservice.APPLY,
+            tagservice.FROM_DIRECTORY,
+            tagservice.FROM_FILENAMES,
+        )
+    }
+    keys.update(
+        {
+            "ask.tags.confirm",
+            "tags.nothing_to_do",
+            "tags.applied",
+            "tags.applied_with_failures",
+            "tags.diff.header",
+            "tags.diff.more",
+            "cmd.tags.usage",
+        }
+    )
+    assert keys <= set(texts.CATALOGUE)
