@@ -8,7 +8,6 @@ behind a download.  Every reply is rendered from an event through
 from __future__ import annotations
 
 import functools
-import io
 import mimetypes
 from collections.abc import Callable
 from pathlib import Path
@@ -22,7 +21,11 @@ from ..ingest import IngestService
 from ..jobs import Job, JobRegistry, WorkerPool, parse_callback
 from ..library import MediaLibrary
 from ..tags import TrackTags
+from ..tagservice import TagService
 from . import render, texts
+from .download import open_telegram_file
+
+STAGE_DOWNLOAD = "stage.download"
 
 
 class BotApp:
@@ -38,6 +41,7 @@ class BotApp:
         self.library = library or MediaLibrary(config.library_root)
         self.registry = registry or JobRegistry(ttl_s=config.job_ttl_s)
         self.service = IngestService(self.library, self.registry)
+        self.tags = TagService(self.library, self.registry)
         self.bot = telebot.TeleBot(config.token, parse_mode="HTML")
         self.throttle = render.ProgressThrottle(
             config.progress_interval_s,
@@ -72,7 +76,12 @@ class BotApp:
             return
 
         text = render.render(event)
-        markup = render.keyboard(event) if isinstance(event, Question) else None
+        markup = None
+        if isinstance(event, Question):
+            markup = render.keyboard(event)
+            proposal = job.payload.get("proposal")
+            if proposal is not None:
+                text = f"{render.proposal_table(proposal)}\n\n{text}"
 
         if isinstance(event, (Done, Failed)):
             self.throttle.forget(job.id)
@@ -132,6 +141,11 @@ class BotApp:
                 ),
             )
 
+        @bot.message_handler(commands=["tags"])
+        @self._allowed
+        def on_tags(message):
+            self._submit_tags(message)
+
         @bot.message_handler(content_types=["audio", "document", "voice"])
         @self._allowed
         def on_file(message):
@@ -168,18 +182,35 @@ class BotApp:
         )
 
     def _download_and_ingest(self, job: Job, media, hint: TrackTags, emit):
-        emit(Progress(job.id, "download"))
+        emit(Progress(job.id, STAGE_DOWNLOAD, 0, getattr(media, "file_size", None)))
         info = self.bot.get_file(media.file_id)
-        payload = self.bot.download_file(info.file_path)
         filename = _filename_for(media, info.file_path)
-        emit(Progress(job.id, "store"))
-        return self.service.start(
-            job,
-            io.BytesIO(payload),
-            filename,
-            hint,
-            max_bytes=self.config.max_upload_bytes,
+
+        response, stream = open_telegram_file(
+            self.config.token,
+            info.file_path,
+            lambda done, total: emit(Progress(job.id, STAGE_DOWNLOAD, done, total)),
+            expected_size=getattr(media, "file_size", None),
         )
+        try:
+            return self.service.start(
+                job,
+                stream,
+                filename,
+                hint,
+                max_bytes=self.config.max_upload_bytes,
+            )
+        finally:
+            response.close()
+
+    def _submit_tags(self, message) -> None:
+        _, _, path = (message.text or "").partition(" ")
+        path = path.strip()
+        if not path:
+            self.bot.reply_to(message, texts.t("cmd.tags.usage"))
+            return
+        job = self.registry.create("tags", message.chat.id, message.from_user.id)
+        self.pool.submit(job, lambda j, emit: self.tags.start(j, path))
 
     def _answer_callback(self, call) -> None:
         self.bot.answer_callback_query(call.id)
@@ -189,7 +220,8 @@ class BotApp:
         except Exception:  # noqa: BLE001 — expired or malformed button
             self.bot.send_message(call.message.chat.id, texts.t("error.job_unknown"))
             return
-        self.pool.submit(job, lambda j, emit: self.service.answer_option(j, option))
+        service = self.tags if job.kind == "tags" else self.service
+        self.pool.submit(job, lambda j, emit: service.answer_option(j, option))
 
     def _answer_text(self, message) -> None:
         pending = self.registry.waiting_for_text(message.chat.id)

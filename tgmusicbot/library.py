@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 from . import naming
-from .errors import TooLarge, UnsupportedFormat
+from .errors import TooLarge, UnsafeName, UnsupportedFormat
 from .tags import AUDIO_EXTENSIONS, TrackTags
 
 CHUNK_SIZE = 1 << 20
@@ -78,6 +78,19 @@ class MediaLibrary:
 
     def album_dir(self, artist: str, album: str) -> Path:
         return self.root / naming.sanitize(artist) / naming.sanitize(album)
+
+    def resolve(self, relative: str) -> Path:
+        """Turn user input into a path guaranteed to be inside the library."""
+        text = str(relative).strip().strip('"').rstrip("/")
+        root = self.root.resolve()
+        candidate = Path(text)
+        if candidate.is_absolute():
+            resolved = candidate.resolve()
+        else:
+            resolved = (root / text.lstrip("/")).resolve()
+        if resolved != root and not resolved.is_relative_to(root):
+            raise UnsafeName(relative)
+        return resolved
 
     def track_path(self, tags: TrackTags, extension: str) -> Path:
         tags.require_complete()

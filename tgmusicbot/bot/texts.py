@@ -20,15 +20,24 @@ CATALOGUE: dict[str, str] = {
         "<b>What works now</b>\n"
         "• send an audio file or a document — I read its tags and file it\n"
         "• if a tag is missing, I ask for it; just reply with the value\n"
+        "• <code>/tags &lt;path&gt;</code> — repair the tags of an album or an "
+        "artist; you pick whether the tags, the folder names or the file names "
+        "are right, and nothing is written until you press Apply\n"
         "• /status — queue and library root\n\n"
-        "<b>Coming</b>: /tags, /dl, magnet links, rutracker search."
+        "<b>Coming</b>: /dl, magnet links, rutracker search."
     ),
     "cmd.status": (
         "Library: <code>{root}</code>\nLive jobs: {jobs}\nWorkers: {workers}"
     ),
+    "cmd.tags.usage": (
+        "Usage: <code>/tags &lt;path inside the library&gt;</code>\n"
+        "e.g. <code>/tags Pink Floyd/Meddle</code> or <code>/tags Pink Floyd</code>"
+    ),
     # -- ingest ------------------------------------------------------------
     "ingest.received": "Got <code>{filename}</code>, working…",
-    "ingest.progress": "{stage}… {percent}%",
+    "stage.download": "Downloading",
+    "ingest.progress": "{stage} <code>{bar}</code> {percent}% of {size}",
+    "ingest.progress.unknown": "{stage}…",
     "ingest.created": "Saved:\n<code>{path}</code>",
     "ingest.renamed": (
         "A different file already had that name. Saved as:\n<code>{path}</code>"
@@ -48,6 +57,25 @@ CATALOGUE: dict[str, str] = {
     "ask.album.singles": "Singles",
     "ask.cancel": "Cancel",
     "ask.cancelled": "Cancelled. Nothing was written.",
+    # -- tag repair --------------------------------------------------------
+    "ask.tags.confirm": (
+        "<b>{path}</b> — {changed} of {total} tracks would change "
+        "(source: {source}).\nNothing has been written yet."
+    ),
+    "ask.tags.apply": "Apply",
+    "ask.tags.from_directory": "From directory name",
+    "ask.tags.from_filenames": "From file names",
+    "tags.diff.header": "<b>{path}</b> — source: {source}",
+    "tags.diff.more": "…and {count} more",
+    "tags.nothing_to_do": "<b>{path}</b>: tags already look right, nothing to change.",
+    "tags.applied": (
+        "Wrote {written} files in <b>{path}</b>.\n"
+        "Previous tags saved to <code>.tags-backup.json</code>."
+    ),
+    "tags.applied_with_failures": (
+        "Wrote {written} files in <b>{path}</b>, {failed} failed.\n"
+        "Previous tags saved to <code>.tags-backup.json</code>."
+    ),
     # -- outcomes ----------------------------------------------------------
     "done.generic": "Done.",
     # -- errors ------------------------------------------------------------
@@ -64,6 +92,8 @@ CATALOGUE: dict[str, str] = {
     "error.too_large": "Too big: {size} bytes, limit is {limit}.",
     "error.source_unavailable": "{source} is unreachable: {reason}",
     "error.job_unknown": "That request expired — send the file again.",
+    "error.path_not_found": "No such directory in the library: <code>{path}</code>",
+    "error.no_audio_files": "No audio files under <code>{path}</code>",
     "error.not_allowed": "Not for you.",
 }
 

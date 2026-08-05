@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from . import naming
-from .errors import AlbumUnknown, ArtistUnknown, TitleUnknown
+from .errors import AlbumUnknown, ArtistUnknown, TitleUnknown, UnsupportedFormat
 
 AUDIO_EXTENSIONS = frozenset(
     {".mp3", ".flac", ".m4a", ".mp4", ".aac", ".ogg", ".oga", ".opus", ".wav", ".ape", ".wv", ".wma"}
@@ -86,6 +86,54 @@ def read_tags(path: Path) -> TrackTags:
         track_no=track_no,
         total_tracks=total,
     )
+
+
+def write_tags(path: Path, tags: TrackTags) -> None:
+    """Write tags back in the format the file already uses.
+
+    ID3 goes out as v2.4/UTF-8 with no v1 block (v1 has no encoding field at
+    all, and a stale latin-1 v1 tag is how half the mojibake in an old
+    collection survives a repair).
+    """
+    import mutagen
+
+    try:
+        audio = mutagen.File(path, easy=True)
+    except Exception as error:  # noqa: BLE001 — unparseable is "not audio" to us
+        raise UnsupportedFormat(Path(path).suffix) from error
+    if audio is None:
+        raise UnsupportedFormat(Path(path).suffix)
+    if audio.tags is None:
+        audio.add_tags()
+
+    _assign(audio, "artist", tags.artist)
+    _assign(audio, "albumartist", tags.artist)
+    _assign(audio, "album", tags.album)
+    _assign(audio, "title", tags.title)
+    _assign(audio, "tracknumber", _format_track_number(tags))
+
+    try:
+        audio.save(v1=0, v2_version=4)
+    except TypeError:  # Vorbis comments and MP4 atoms take no ID3 options
+        audio.save()
+
+
+def _assign(audio, key: str, value: str | None) -> None:
+    if value:
+        try:
+            audio.tags[key] = value
+        except (KeyError, ValueError):
+            pass  # e.g. no albumartist in this format's easy mapping
+    elif key in audio.tags:
+        del audio.tags[key]
+
+
+def _format_track_number(tags: TrackTags) -> str | None:
+    if tags.track_no is None:
+        return None
+    if tags.total_tracks:
+        return f"{tags.track_no}/{tags.total_tracks}"
+    return str(tags.track_no)
 
 
 def _parse_track_number(raw: str | None) -> tuple[int | None, int | None]:

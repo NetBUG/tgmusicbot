@@ -91,6 +91,22 @@ class UnsupportedFormat(TgMusicError):
         return {"extension": self.extension}
 
 
+class PathNotFound(TgMusicError):
+    code = "error.path_not_found"
+
+    def __init__(self, path: str):
+        super().__init__(path)
+        self.path = path
+
+    @property
+    def params(self) -> dict[str, object]:
+        return {"path": self.path}
+
+
+class NoAudioFiles(PathNotFound):
+    code = "error.no_audio_files"
+
+
 class TooLarge(TgMusicError):
     code = "error.too_large"
 

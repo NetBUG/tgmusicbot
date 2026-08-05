@@ -17,10 +17,28 @@ def escape(value: object) -> str:
     return html.escape(str(value), quote=False)
 
 
+BAR_WIDTH = 12
+BAR_FULL = "█"
+BAR_EMPTY = "░"
+
+
+def bar(fraction: float, width: int = BAR_WIDTH) -> str:
+    filled = max(0, min(width, round(fraction * width)))
+    return BAR_FULL * filled + BAR_EMPTY * (width - filled)
+
+
 def render(event: Event) -> str:
     if isinstance(event, Progress):
-        percent = "?" if event.fraction is None else f"{event.fraction * 100:.0f}"
-        return texts.t("ingest.progress", stage=escape(event.stage), percent=percent)
+        stage = texts.t(event.stage)
+        if event.fraction is None:
+            return texts.t("ingest.progress.unknown", stage=stage)
+        return texts.t(
+            "ingest.progress",
+            stage=stage,
+            bar=bar(event.fraction),
+            percent=f"{event.fraction * 100:.0f}",
+            size=human_size(event.total),
+        )
     if isinstance(event, Question):
         return texts.t(event.key, **_escaped(event.params))
     if isinstance(event, Done):
@@ -47,6 +65,47 @@ def keyboard(question: Question):
 
 def _escaped(params: dict[str, object]) -> dict[str, str]:
     return {key: escape(value) for key, value in params.items()}
+
+
+MAX_DIFF_TRACKS = 12
+_EMPTY = "—"
+
+
+def proposal_table(proposal, *, limit: int = MAX_DIFF_TRACKS) -> str:
+    """Before → after, per track. The dry run the user actually reads."""
+    changed = proposal.changed
+    lines = [
+        texts.t(
+            "tags.diff.header",
+            path=escape(proposal.target.name),
+            source=escape(proposal.source),
+        )
+    ]
+    for track in changed[:limit]:
+        lines.append(f"\n<code>{escape(track.path.name)}</code>")
+        for field, (before, after) in track.changes.items():
+            lines.append(
+                f"  {escape(field)}: {escape(_show(before))} → "
+                f"<b>{escape(_show(after))}</b>"
+            )
+    if len(changed) > limit:
+        lines.append("\n" + texts.t("tags.diff.more", count=len(changed) - limit))
+    return "\n".join(lines)
+
+
+def _show(value: object) -> str:
+    return _EMPTY if value in (None, "") else str(value)
+
+
+def human_size(size: int | None) -> str:
+    if not size:
+        return "?"
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} GB"
 
 
 class ProgressThrottle:

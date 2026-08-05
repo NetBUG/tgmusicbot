@@ -107,6 +107,45 @@ def parse_track_filename(filename: str) -> ParsedTrack:
     return ParsedTrack(title=stem, artist=artist, track_no=track_no)
 
 
+@dataclass(frozen=True, slots=True)
+class AlbumDirName:
+    album: str
+    artist: str | None = None
+    year: int | None = None
+
+
+_BRACKETED_YEAR = re.compile(r"[(\[]\s*((?:19|20)\d{2})\s*[)\]]")
+_LEADING_YEAR = re.compile(r"^((?:19|20)\d{2})\s*[-.–—]?\s+")
+
+
+def parse_album_dirname(name: str) -> AlbumDirName:
+    """``"Pink Floyd - Meddle (1971)"`` -> artist, album and year.
+
+    Used when the user says the *directory* is the source of truth.
+    """
+    text = _WHITESPACE.sub(" ", name.replace("_", " ")).strip()
+
+    year: int | None = None
+    bracketed = _BRACKETED_YEAR.search(text)
+    if bracketed:
+        year = int(bracketed.group(1))
+        text = text[: bracketed.start()] + " " + text[bracketed.end() :]
+    else:
+        leading = _LEADING_YEAR.match(text)
+        if leading:
+            year = int(leading.group(1))
+            text = text[leading.end() :]
+
+    text = _WHITESPACE.sub(" ", text).strip(" -–—.")
+
+    artist: str | None = None
+    parts = _SEPARATOR.split(text, maxsplit=1)
+    if len(parts) == 2 and parts[0] and parts[1]:
+        artist, text = parts[0].strip(), parts[1].strip()
+
+    return AlbumDirName(album=text, artist=artist, year=year)
+
+
 def format_track_filename(
     title: str, extension: str, track_no: int | None = None
 ) -> str:
