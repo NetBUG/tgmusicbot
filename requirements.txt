@@ -1,2 +1,5 @@
+# NB: `telebot` on PyPI is a *different* project; it only pulled
+# pyTelegramBotAPI in as a transitive dependency. Pin the real one.
 loguru>=0.7.0,<1.0.0
-telebot==0.0.5
+pyTelegramBotAPI>=4.29,<5.0
+mutagen>=1.47

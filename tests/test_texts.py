@@ -1,0 +1,90 @@
+"""Guards on the i18n boundary.
+
+These are the tests that make deferring the wording safe: they fail the moment
+the core starts producing prose, or an event references a key nobody wrote.
+"""
+
+import inspect
+import pkgutil
+from pathlib import Path
+
+import pytest
+
+import tgmusicbot
+from tgmusicbot import errors, ingest
+from tgmusicbot.bot import texts
+
+CORE_DIR = Path(tgmusicbot.__file__).parent
+
+
+def core_modules():
+    for module in pkgutil.walk_packages([str(CORE_DIR)], prefix="tgmusicbot."):
+        if not module.name.startswith("tgmusicbot.bot"):
+            yield module.name
+
+
+def imported_names(path: Path) -> set[str]:
+    import ast
+
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text())):
+        if isinstance(node, ast.Import):
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            names.add(module)
+            names.update(f"{module}.{alias.name}" for alias in node.names)
+    return names
+
+
+def test_core_never_imports_the_text_catalogue():
+    """If the core could reach ``texts``, localisation would leak out of ``bot/``."""
+    offenders = [
+        name
+        for name in core_modules()
+        if any(
+            part.endswith("texts") or part.endswith("bot.handlers")
+            for part in imported_names(
+                CORE_DIR.parent / (name.replace(".", "/") + ".py")
+            )
+        )
+    ]
+    assert offenders == []
+
+
+@pytest.mark.parametrize(
+    "error_class",
+    [
+        value
+        for value in vars(errors).values()
+        if inspect.isclass(value) and issubclass(value, errors.TgMusicError)
+    ],
+)
+def test_every_error_code_has_a_string(error_class):
+    assert error_class.code in texts.CATALOGUE
+
+
+def test_every_key_the_ingest_flow_can_emit_has_a_string():
+    keys = set(ingest._STATUS_KEYS.values())
+    for question_key, options in ingest._QUESTIONS.values():
+        keys.add(question_key)
+        keys.update(option.key for option in options)
+    keys.add("ask.cancelled")
+    assert keys <= set(texts.CATALOGUE)
+
+
+def test_rendering_a_real_error_interpolates_its_params():
+    error = errors.TooLarge(size=100, limit=10)
+    rendered = texts.t(error.code, **error.params)
+    assert "100" in rendered and "10" in rendered
+    assert "{" not in rendered
+
+
+def test_missing_key_and_missing_param_are_visible_not_silent():
+    assert texts.t("no.such.key") == "[no.such.key]"
+    assert texts.t("error.too_large", size=1) == "[error.too_large: missing limit]"
+
+
+def test_catalogue_templates_are_all_formattable():
+    for key, template in texts.CATALOGUE.items():
+        assert "{{" not in template, key
