@@ -50,3 +50,22 @@ def test_allowlist_is_mandatory():
     del env["TG_ALLOWED_USERS"]
     with pytest.raises(ConfigError):
         Config.from_env(env)
+
+
+def test_youtube_knobs_default_to_yt_dlp_behaviour():
+    config = Config.from_env(VALID)
+    assert config.yt_cookies_file is None
+    assert config.yt_player_clients == ()
+
+
+def test_youtube_knobs_are_read_from_the_environment():
+    config = Config.from_env(
+        VALID | {"YT_COOKIES_FILE": "/etc/cookies.txt", "YT_PLAYER_CLIENTS": "web_safari, ios,"}
+    )
+    assert config.yt_cookies_file == "/etc/cookies.txt"
+    assert config.yt_player_clients == ("web_safari", "ios")
+
+
+def test_ffmpeg_is_taken_from_the_environment_over_path():
+    config = Config.from_env(VALID | {"FFMPEG_PATH": "/opt/ffmpeg/bin/ffmpeg"})
+    assert config.ffmpeg_path == "/opt/ffmpeg/bin/ffmpeg"

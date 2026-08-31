@@ -16,16 +16,21 @@ import telebot
 from loguru import logger
 
 from ..config import Config
+from ..dlservice import DownloadService
 from ..events import Done, Event, Failed, Progress, Question
 from ..ingest import IngestService
 from ..jobs import Job, JobRegistry, WorkerPool, parse_callback
 from ..library import MediaLibrary
+from ..naming import clean_artist
+from ..sources.youtube import YouTubeSource, find_url
 from ..tags import TrackTags
 from ..tagservice import TagService
 from . import render, texts
 from .download import open_telegram_file
 
 STAGE_DOWNLOAD = "stage.download"
+STAGE_SEARCH = "stage.search"
+STAGE_INSPECT = "stage.inspect"
 
 
 class BotApp:
@@ -36,12 +41,27 @@ class BotApp:
         library: MediaLibrary | None = None,
         registry: JobRegistry | None = None,
         clock: Callable[[], float] | None = None,
+        source=None,
     ):
         self.config = config
         self.library = library or MediaLibrary(config.library_root)
         self.registry = registry or JobRegistry(ttl_s=config.job_ttl_s)
         self.service = IngestService(self.library, self.registry)
         self.tags = TagService(self.library, self.registry)
+        self.downloads = DownloadService(
+            self.library,
+            self.registry,
+            self.service,
+            source
+            or YouTubeSource(
+                min_duration_s=config.min_duration_s,
+                max_duration_s=config.max_duration_s,
+                ffmpeg_path=config.ffmpeg_path,
+                cookies_file=config.yt_cookies_file,
+                player_clients=config.yt_player_clients,
+            ),
+            limit=config.search_limit,
+        )
         self.bot = telebot.TeleBot(config.token, parse_mode="HTML")
         self.throttle = render.ProgressThrottle(
             config.progress_interval_s,
@@ -79,9 +99,7 @@ class BotApp:
         markup = None
         if isinstance(event, Question):
             markup = render.keyboard(event)
-            proposal = job.payload.get("proposal")
-            if proposal is not None:
-                text = f"{render.proposal_table(proposal)}\n\n{text}"
+            text = self._with_context(job, event, text)
 
         if isinstance(event, (Done, Failed)):
             self.throttle.forget(job.id)
@@ -98,6 +116,14 @@ class BotApp:
             logger.debug("edit failed ({}), sending a new message", error)
             sent = self.bot.send_message(job.chat_id, text, reply_markup=markup)
             job.message_id = sent.message_id
+
+    def _with_context(self, job: Job, event: Question, text: str) -> str:
+        """A question about a list or a diff is useless without the list."""
+        if event.key == "ask.tags.confirm" and job.payload.get("proposal"):
+            return f"{render.proposal_table(job.payload['proposal'])}\n\n{text}"
+        if event.key == "ask.dl.choose" and job.payload.get("candidates"):
+            return f"{text}\n\n{render.candidate_list(job.payload['candidates'])}"
+        return text
 
     # -- handlers ----------------------------------------------------------
 
@@ -141,6 +167,11 @@ class BotApp:
                 ),
             )
 
+        @bot.message_handler(commands=["dl"])
+        @self._allowed
+        def on_dl(message):
+            self._submit_dl(message)
+
         @bot.message_handler(commands=["tags"])
         @self._allowed
         def on_tags(message):
@@ -173,7 +204,8 @@ class BotApp:
             "ingest", message.chat.id, message.from_user.id, file_id=media.file_id
         )
         hint = TrackTags(
-            artist=getattr(media, "performer", None),
+            # Telegram passes on whatever the file claims, "P!nk - Topic" included
+            artist=clean_artist(getattr(media, "performer", None)),
             title=getattr(media, "title", None),
         )
         self.pool.submit(
@@ -203,9 +235,33 @@ class BotApp:
         finally:
             response.close()
 
+    def _submit_dl(self, message) -> None:
+        query = _argument(message.text)
+        url = find_url(query)
+        if url:
+            self._submit_url(message, url)
+            return
+        if not query:
+            self.bot.reply_to(message, texts.t("cmd.dl.usage"))
+            return
+        job = self.registry.create("dl", message.chat.id, message.from_user.id)
+        self.pool.submit(job, lambda j, emit: self._search_and_ask(j, query, emit))
+
+    def _submit_url(self, message, url: str) -> None:
+        """A link on its own is a request, exactly like a sent file."""
+        job = self.registry.create("dl", message.chat.id, message.from_user.id)
+        self.pool.submit(job, lambda j, emit: self._inspect_and_ask(j, url, emit))
+
+    def _search_and_ask(self, job: Job, query: str, emit):
+        emit(Progress(job.id, STAGE_SEARCH))
+        return self.downloads.start(job, query)
+
+    def _inspect_and_ask(self, job: Job, url: str, emit):
+        emit(Progress(job.id, STAGE_INSPECT))
+        return self.downloads.start_url(job, url)
+
     def _submit_tags(self, message) -> None:
-        _, _, path = (message.text or "").partition(" ")
-        path = path.strip()
+        path = _argument(message.text)
         if not path:
             self.bot.reply_to(message, texts.t("cmd.tags.usage"))
             return
@@ -220,18 +276,39 @@ class BotApp:
         except Exception:  # noqa: BLE001 — expired or malformed button
             self.bot.send_message(call.message.chat.id, texts.t("error.job_unknown"))
             return
-        service = self.tags if job.kind == "tags" else self.service
-        self.pool.submit(job, lambda j, emit: service.answer_option(j, option))
+        service = self._service_for(job)
+        self.pool.submit(job, lambda j, emit: service.answer_option(j, option, emit))
+
+    def _service_for(self, job: Job):
+        if job.kind == "tags":
+            return self.tags
+        if job.kind == "dl":
+            return self.downloads
+        return self.service
 
     def _answer_text(self, message) -> None:
-        pending = self.registry.waiting_for_text(message.chat.id)
         answer = (message.text or "").strip()
+
+        # a link is unmistakably a new request, even mid-dialogue
+        url = find_url(answer)
+        if url:
+            self._submit_url(message, url)
+            return
+
+        pending = self.registry.waiting_for_text(message.chat.id)
         if pending is None or not answer:
             self.bot.reply_to(message, texts.t("cmd.help"))
             return
         # clears the question first, so a second message cannot answer it twice
         job = self.registry.answer_text(pending.id, answer)
-        self.pool.submit(job, lambda j, emit: self.service.resume(j, answer))
+        service = self._service_for(job)
+        self.pool.submit(job, lambda j, emit: service.resume(j, answer, emit))
+
+
+def _argument(text: str | None) -> str:
+    """Everything after the command word."""
+    _, _, argument = (text or "").partition(" ")
+    return argument.strip()
 
 
 def _filename_for(media, telegram_path: str) -> str:

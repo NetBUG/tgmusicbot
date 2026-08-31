@@ -373,7 +373,141 @@ Still not verified against a live Telegram token.
 * The stage name was a raw internal word (`download`) leaking into the UI; it is a
   catalogue key now, like everything else the user sees.
 
-Next: Phase 2 (YouTube via yt-dlp), which needs ffmpeg in the image.
+**Phase 2 implemented (2026-08-05).** `/dl` against YouTube, 262 tests total.
+
+| File | Contents |
+|---|---|
+| `sources/base.py` | `Candidate` / `Fetched` / `Source` protocol — rutracker will fit it |
+| `sources/youtube.py` | yt-dlp as a library: search, filters, remux policy, progress hook |
+| `dlservice.py` | `/dl` as a job; `parse_query` splits `Artist - Album - Title` |
+| `ingest.py` | now writes tags into the file (see below) |
+| `library.py` | `rename_staged`, `restat`; `sweep_incoming` also clears dead `dl-*` dirs |
+
+Verified live against real YouTube: `/dl Pink Floyd - Meddle - One of These Days`
+offered five results, downloaded 5.5 MB of m4a and filed it as
+`Pink Floyd/Meddle/One of These Days.m4a`; a second identical `/dl` was reported as
+a duplicate rather than saved as `… (2)`.
+
+Two problems the live run exposed, both fixed:
+
+1. **The file landed with no tags at all.** Placement is a directory tree; a player
+   reads tags. Untagged, the track shows up in Navidrome as Unknown Artist no matter
+   how tidy the path is. `IngestService` now writes the placement metadata into the
+   file. Existing tags are never overwritten — only gaps are filled — unless the
+   caller passes `prefer_hint`, which `/dl` does, because what the user typed beats
+   whatever a YouTube upload claims.
+2. **Tagging broke dedup.** Writing tags changes the bytes, so a hash taken while
+   staging no longer matches the filed file, and re-downloading the same track would
+   have landed as `… (2)`. Tags are therefore written to the *staged* file and the
+   hash recomputed (`restat`) before the move. Staged files are also renamed to their
+   real extension first, because mutagen sniffs by filename as well as content and an
+   MP3 with no ID3 block scores zero when the name ends in `.part`.
+
+Deviation from the plan, deliberate: **no re-encode and no unconditional remux.** The
+plan said "remux WebM into Ogg"; the implementation makes that conditional
+(`webm>ogg`), so an m4a download is passed through untouched. Without ffmpeg — this
+sandbox has none — the format selector refuses WebM outright rather than filing a
+container that music clients mishandle.
+
+Also fixed: `quiet: True` does not silence yt-dlp's download bar, which was writing
+`[download] 42%` to stdout; that needs `noprogress: True`.
+
+**Link handling added on request (2026-08-05), beyond the original plan.**
+
+A YouTube link sent as a plain message is now handled like a sent file: no command,
+no search step. The flow is inspect → propose → confirm:
+
+* `sources/youtube.py` — `find_url()` recognises `watch?v=`, `youtu.be`, `shorts/`,
+  `live/`, `embed/`, `m.`/`music.` hosts and links embedded in a sentence, and
+  normalises all of them to `watch?v=<id>`. That normalisation matters: a
+  `music.youtube.com` link carries `list=`, and yt-dlp would fetch the whole playlist.
+* `sources/youtube.py` — `inspect()` returns metadata without downloading, resolving
+  the format selector so the *extension* is known in advance and the proposed path can
+  be shown in full. An unplayable link therefore fails before any bytes move.
+* `naming.clean_video_title()` — strips upload decoration in both languages:
+  `(Official Audio)`, `[4K]`, `(Remastered 2011)`, `(официальный клип)`,
+  `(премьера клипа, 2002)`, `(текст песни)`. Only known noise is removed; brackets
+  holding part of a real name are left alone (`Aphex Twin - #3 (Rhubarb)`).
+* `dlservice.py` — `start_url()` proposes `Artist/Album/Title.ext` and asks
+  **Yes, save / Specify path / Cancel**, as requested. A two-part title leaves the
+  album unknown, so `Singles` is proposed rather than asking another question. With no
+  artist in the title the channel is used — for a `… - Topic` auto-upload that is
+  exactly the artist name.
+* `parse_target()` accepts a slash path, the dash form, or a single word (taken as the
+  album). A typed path still goes through `sanitize()`, so `../../etc/passwd` is
+  refused rather than followed.
+* Precedence in `_answer_text`: a link wins over a pending question. A link is
+  unmistakably a new request, and no answer to any of our questions looks like a URL.
+
+Verified live on the requested link `watch?v=Q8WJz-DmPVg`: the bot proposed
+`МакSим/Singles/Знаешь ли ты.m4a`, downloaded 3.8 MB only after Yes, and the filed
+file reads back with artist/album/title set. 315 tests.
+
+**Container image + ffmpeg (2026-08-05), Phase 5 pulled forward.**
+
+`Dockerfile` is now `python:3.14-slim` + ffmpeg (Alpine dropped: no ffmpeg in base,
+and musl buys nothing when every dependency is pure Python). Also: build-time sanity
+checks (`ffmpeg -version`, importing every dependency and `BotApp`) so a broken image
+fails at build rather than on the first message; `STOPSIGNAL SIGINT`, because telebot
+stops cleanly on `KeyboardInterrupt` while the default SIGTERM kills it mid-download;
+uid 1000 to match the NFS export's `anonuid`; OCI labels; `.dockerignore` that keeps
+`.env`, `media/`, `logs/` and the venv out of the build context.
+
+`docker-compose.yml`: `version:` and the dead `ports: 4001:80` removed, `init: true`
+added (yt-dlp spawns ffmpeg, and PID 1 python does not reap), library path
+parameterised via `LIBRARY_PATH` so the same file serves this sandbox and sowilo.
+`run.sh` is idempotent (`mkdir -p`), refuses to start without `.env`, and picks
+whichever compose implementation is installed.
+
+**Image built and running (podman 5.7.0, rootless).** 619 MB, `python:3.14-slim`
+(123 MB) plus ffmpeg 7.1.5 and the dependency tree. Verified:
+
+| Check | Result |
+|---|---|
+| build-time assertions | pass (they are `RUN` steps, so the build would have failed) |
+| `podman run` with no env | exits 2, logs `TG_TOKEN: is not set` |
+| identity inside | `uid=1000(tgmusic)`, Python 3.14.6, yt-dlp 2026.07.04 |
+| WebM→Ogg remux **inside the image** | `ogg`/`opus`, audio MD5 identical to the source |
+| writing into the bind-mounted library | `ingest.created /media/Container Probe/…`, host sees `netbug:netbug` |
+| live run | `Started polling` as @MusicNetbugBot; the container is now the live bot |
+
+**One real difference between runtimes, found the hard way.** Rootless podman maps
+container uid 1000 to a *subuid*, so the bind-mounted library was not writable and
+yt-dlp died with `Permission denied: '/media/….part'`. Fix: `--userns=keep-id`, added
+to compose as `userns_mode: ${USERNS_MODE:-}` — empty by default so Docker (where
+container uid 1000 really is host uid 1000, and which is what sowilo runs) is
+unaffected, and set to `keep-id` in this sandbox's `.env`.
+
+No compose implementation is installed here (`podman compose` finds no provider), so
+`run.sh` itself is still unexercised; the equivalent `podman run` is in the README.
+
+**The ffmpeg remux branch is now verified end to end** — the one thing Phase 2 could
+not test. ffmpeg was installed as a static build into `~/.local/bin` (no root needed;
+`Config.from_env` picks it up off `PATH`). A 40 s Opus-in-WebM file was synthesised,
+served over localhost and fetched through `YouTubeSource`:
+
+| | |
+|---|---|
+| container before → after | `matroska,webm` → `ogg` |
+| audio codec | `opus` → `opus` |
+| audio stream MD5 | `12469b5587efd706a8e07c4481b5a45e` → **identical** |
+
+So the remux is a pure container change, exactly as the plan required. The local-HTTP
+route was necessary because **YouTube now answers this IP with "Sign in to confirm
+you're not a bot"** — all six extractor clients tried (`tv`, `android_vr`,
+`web_safari`, `web_embedded`, `ios`, `mweb`) either hit the same wall, returned no
+formats, or reported DRM. Our own error handling behaved: a typed `SourceUnavailable`
+with a one-line reason, nothing written, no partial file.
+
+Two knobs added for that, both defaulting to yt-dlp's own behaviour:
+`YT_COOKIES_FILE` (a Netscape cookie jar — the documented fix) and
+`YT_PLAYER_CLIENTS` (comma-separated extractor clients). 333 tests.
+
+Note for the sowilo deployment: `media/` moved to `/home/netbug/media` on this VM and
+`.env` follows it; the real collection is still `/media/Magic/netbug/Music/ARTISTS`
+behind `LIBRARY_PATH`.
+
+Next: Phase 3 (torrents via qBittorrent).
 
 Open questions:
 - rutracker credentials still to be provided

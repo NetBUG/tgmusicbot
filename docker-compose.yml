@@ -1,19 +1,29 @@
-version: "3"
+# `version:` is obsolete in Compose v2 and `ports:` was dead config — the bot
+# uses long polling and listens on nothing.
 services:
   tgmusicbot:
     image: tgmusicbot:latest
+    build: .
     container_name: tgmusicbot
-    # network_mode: "host"
     env_file: .env
-    user: 1000:1000
-    ports:
-      - "4001:80"
+    environment:
+      # override whatever .env says: these are container paths, and .env holds
+      # host paths so the bot can also be run straight from a checkout
+      OUTPUT_FOLDER: /media
+      LOG_PATH: /var/log/tgmusicbot/tgmusicbot.log
+    # LIBRARY_PATH comes from .env; the default is this sandbox, sowilo sets
+    # LIBRARY_PATH=/media/Magic/netbug/Music/ARTISTS
     volumes:
       - type: bind
-        source: /media/Magic/netbug/Music/ARTISTS
-#        source: /media/Magic/netbug/Music/Download
+        source: ${LIBRARY_PATH:-/home/netbug/media}
         target: /media
       - type: bind
-        source: /var/log/tgmusicbot
-        target: /tmp/log
-    restart: always
+        source: ${LOG_DIR:-/var/log/tgmusicbot}
+        target: /var/log/tgmusicbot
+    # ffmpeg is spawned as a subprocess by yt-dlp; PID 1 python does not reap
+    init: true
+    # Rootless podman maps container uid 1000 to a subuid, so a bind mount owned
+    # by host uid 1000 is not writable without this. Harmless under Docker,
+    # where container uid 1000 *is* host uid 1000.
+    userns_mode: ${USERNS_MODE:-}
+    restart: unless-stopped

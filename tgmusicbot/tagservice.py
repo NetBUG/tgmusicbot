@@ -39,7 +39,7 @@ class TagService:
         job.payload["target"] = target
         return self._propose(job, Source.TAGS)
 
-    def answer_option(self, job: Job, option: Option) -> Question | Done:
+    def answer_option(self, job: Job, option: Option, emit=None) -> Question | Done:
         if option.key == CANCEL.key:
             self._registry.finish(job, None)
             return Done(job.id, "ask.cancelled")

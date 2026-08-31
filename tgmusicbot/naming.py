@@ -107,6 +107,50 @@ def parse_track_filename(filename: str) -> ParsedTrack:
     return ParsedTrack(title=stem, artist=artist, track_no=track_no)
 
 
+# One decoration word. Real titles rarely consist of nothing but these, which is
+# what makes stripping safe: a bracket has to be *entirely* made of them to go.
+_QUALIFIER = r"""
+    (?: official | audio | video | visualiz(?:er|ation) | music | lyrics? | lyric
+      | hd | hq | uhd | 4k | 8k | full | remaster(?:ed)? | clip | mv | explicit
+      | only | premiere | (?:19|20)\d{2}
+      | офиц\w* | клип\w* | виде\w* | аудио | премьера | текст\w* | песни | слова
+    )
+"""
+# A sequence of them: "(Official Video HD)", "(премьера клипа, 2002)".
+_NOISE_RUN = rf"{_QUALIFIER}(?:[\s,./|-]+{_QUALIFIER})*"
+_TITLE_NOISE = re.compile(
+    rf"[(\[]\s*{_NOISE_RUN}\s*[)\]]", re.IGNORECASE | re.VERBOSE
+)
+_TRAILING_NOISE = re.compile(
+    rf"\s*[-–—|]\s*(?:{_NOISE_RUN}|topic)\s*$", re.IGNORECASE | re.VERBOSE
+)
+_TOPIC_SUFFIX = re.compile(r"\s*[-–—]\s*topic\s*$", re.IGNORECASE)
+
+
+def clean_artist(name: str | None) -> str | None:
+    """Drop YouTube's ``" - Topic"`` from an auto-generated channel name.
+
+    It leaks well beyond the link flow: files ripped from a Topic channel carry
+    it in their own tags, and Telegram passes it on as ``performer``.
+    """
+    if not name:
+        return None
+    return _TOPIC_SUFFIX.sub("", name).strip() or None
+
+
+def clean_video_title(title: str) -> str:
+    """Strip the decoration YouTube uploaders add.
+
+    ``"Pink Floyd - Time (Official Audio) [HD]"`` -> ``"Pink Floyd - Time"``.
+    Only known noise is removed; anything unrecognised is left alone, because a
+    bracket can just as easily hold part of the actual name.
+    """
+    cleaned = _TITLE_NOISE.sub(" ", title)
+    cleaned = _TRAILING_NOISE.sub("", cleaned)
+    cleaned = _WHITESPACE.sub(" ", cleaned).strip()
+    return cleaned.strip(" -–—|") or title.strip()
+
+
 @dataclass(frozen=True, slots=True)
 class AlbumDirName:
     album: str

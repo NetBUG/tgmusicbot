@@ -20,14 +20,23 @@ CATALOGUE: dict[str, str] = {
         "<b>What works now</b>\n"
         "• send an audio file or a document — I read its tags and file it\n"
         "• if a tag is missing, I ask for it; just reply with the value\n"
+        "• <code>/dl Artist - Album - Title</code> — search YouTube and file the "
+        "audio; you pick which result\n"
+        "• just send a YouTube link — I read the title, propose a path and ask "
+        "before saving\n"
         "• <code>/tags &lt;path&gt;</code> — repair the tags of an album or an "
         "artist; you pick whether the tags, the folder names or the file names "
         "are right, and nothing is written until you press Apply\n"
         "• /status — queue and library root\n\n"
-        "<b>Coming</b>: /dl, magnet links, rutracker search."
+        "<b>Coming</b>: magnet links, rutracker search."
     ),
     "cmd.status": (
         "Library: <code>{root}</code>\nLive jobs: {jobs}\nWorkers: {workers}"
+    ),
+    "cmd.dl.usage": (
+        "Usage: <code>/dl Artist - Album - Title</code>\n"
+        "Two parts also work (<code>/dl Pink Floyd - Time</code>) — I will ask "
+        "for the album."
     ),
     "cmd.tags.usage": (
         "Usage: <code>/tags &lt;path inside the library&gt;</code>\n"
@@ -57,6 +66,29 @@ CATALOGUE: dict[str, str] = {
     "ask.album.singles": "Singles",
     "ask.cancel": "Cancel",
     "ask.cancelled": "Cancelled. Nothing was written.",
+    # -- youtube -----------------------------------------------------------
+    "stage.search": "Searching YouTube",
+    "stage.inspect": "Reading the link",
+    "stage.fetch": "Downloading from YouTube",
+    "ask.dl.choose": "Found these for <code>{query}</code> — which one?",
+    "ask.dl.candidate": "{index}. {title}",
+    "ask.dl.confirm": (
+        "<b>{title}</b>\n<i>{uploader}</i>\n\n"
+        "Save the audio as:\n<code>{path}</code>?"
+    ),
+    "ask.dl.save": "Yes, save",
+    "ask.dl.specify": "Specify path",
+    "ask.dl.specify_path": (
+        "Reply with the path, e.g. <code>Artist/Album/Title</code>.\n"
+        "<code>Artist - Album - Title</code> works too, and a single word is "
+        "taken as the album.\nCurrently: <code>{path}</code>"
+    ),
+    "dl.candidates.header": "<b>{count} results</b>",
+    "dl.nothing_found": (
+        "Nothing usable found for <code>{query}</code>.\n"
+        "Live streams, karaoke/remix versions and anything under 30 s or over "
+        "20 min are filtered out — try wording it differently."
+    ),
     # -- tag repair --------------------------------------------------------
     "ask.tags.confirm": (
         "<b>{path}</b> — {changed} of {total} tracks would change "

@@ -9,14 +9,37 @@ missing. Nothing is written until the destination is known.
 
 ## Installation
 
-Invoke `./run.sh` for an automatic Docker install.
-Prerequisites: Docker with Compose and Buildkit.
-NB: there is a nice [script](https://gist.github.com/jniltinho/bcb28a99aef33dcb5f35c297bf71e4ae)
-for installing Buildkit on Debian systems.
+Invoke `./run.sh`: it creates the log directory, builds and starts the
+container. Prerequisites: Docker with Compose v2, or podman-compose — the
+script picks whichever is installed. Buildkit is no longer required (the cache
+mount it needed is gone).
+
+**Rootless podman:** set `USERNS_MODE=keep-id` in `.env`. Rootless podman maps
+container uid 1000 to a *subuid* on the host, so a bind mount owned by host uid
+1000 is not writable without it — the symptom is
+`Permission denied: '/media/….part'`. Under Docker container uid 1000 *is* host
+uid 1000, so leave it empty.
+
+Without any compose implementation, the equivalent of the compose file is:
+
+```sh
+podman build -t tgmusicbot:latest .
+podman run -d --name tgmusicbot --userns=keep-id --init \
+  --env-file .env -e OUTPUT_FOLDER=/media \
+  -e LOG_PATH=/var/log/tgmusicbot/tgmusicbot.log \
+  -v /home/netbug/media:/media:z \
+  -v ./logs:/var/log/tgmusicbot:z \
+  tgmusicbot:latest
+```
 
 Copy `.env.example` to `.env` and fill it in — `.env` is gitignored, so a real
-token never reaches the repository. Adjust the bind mount in
-`docker-compose.yml` to point at your collection.
+token never reaches the repository. Point `LIBRARY_PATH` at your collection;
+compose bind-mounts it at `/media` and overrides `OUTPUT_FOLDER` accordingly, so
+the same `.env` works for a container and for a direct run.
+
+The image is `python:3.14-slim` plus **ffmpeg**, which is what enables the
+WebM/Opus → Ogg remux; without it the bot falls back to m4a. It runs as uid
+1000 to match the `anonuid=1000` squash on the media NFS export.
 
 Running without Docker:
 
@@ -40,18 +63,96 @@ All configuration is environment variables, read once at startup
 | `MAX_UPLOAD_MB` | `200` | Rejected above this size. |
 | `PROGRESS_INTERVAL_S` | `3` | Minimum gap between progress edits (Telegram rate-limits). |
 | `JOB_TTL_S` | `3600` | How long an unanswered question — and its staged bytes — survives. |
+| `SEARCH_LIMIT` | `5` | How many YouTube results to offer. |
+| `MIN_DURATION_S` | `30` | Shorter results are dropped. |
+| `MAX_DURATION_S` | `1200` | Longer results are dropped unless the query asks for live. |
+| `FFMPEG_PATH` | auto | Found on `PATH` when unset. Enables the WebM → Ogg remux. |
+| `YT_COOKIES_FILE` | unset | Netscape cookie jar; see below. |
+| `YT_PLAYER_CLIENTS` | unset | Comma-separated yt-dlp extractor clients, e.g. `web_safari,ios`. |
+| `LIBRARY_PATH` | `/home/netbug/media` | Host path compose mounts at `/media`. Not read by the bot. |
+| `LOG_DIR` | `/var/log/tgmusicbot` | Host path compose mounts for logs. Not read by the bot. |
 
 ## Commands
 
 | Command | Effect |
 |---|---|
 | *(send a file)* | Filed into `<artist>/<album>/<NN - title>.<ext>` |
+| *(send a YouTube link)* | Read the title, propose a path, ask before saving |
+| `/dl Artist - Album - Title` | Search YouTube, pick a result, file the audio |
 | `/tags <path>` | Repair the tags of an album or a whole artist |
 | `/start`, `/help` | What the bot understands |
 | `/status` | Library root, live jobs, worker count |
 
-Coming: `/dl` (YouTube), magnet links, rutracker search — see
-`runs/2026-08-05_feature-plan.md`.
+Coming: magnet links, rutracker search — see `runs/2026-08-05_feature-plan.md`.
+
+## Downloading from YouTube
+
+`/dl Pink Floyd - Meddle - One of These Days` searches, shows up to five
+results with channel and duration, and files whichever you pick. Two parts
+(`/dl Pink Floyd - Time`) also work — the album becomes a question.
+
+The metadata comes from what you typed, never from the video title: channel
+names and YouTube titles are far too unreliable to file a library by. Since a
+YouTube download carries no tags at all, the tags are written into the file
+after it lands — a player reads tags, not paths.
+
+### Sending a link
+
+A YouTube link on its own is treated exactly like a sent file — no command
+needed. The bot reads the video title, works out where the track would go and
+asks first:
+
+```
+МакSим - Знаешь ли ты
+Maksim
+
+Save the audio as:
+МакSим/Singles/Знаешь ли ты.m4a ?
+
+[ Yes, save ] [ Specify path ] [ Cancel ]
+```
+
+Nothing is downloaded until you agree. **Specify path** (or simply replying
+with text) accepts either form:
+
+| Reply | Result |
+|---|---|
+| `Artist/Album/Title` | all three replaced |
+| `Artist/Album` | title kept from the video |
+| `Artist - Album - Title` | same as the slash form |
+| `Meddle` | taken as the album — the field a proposal gets wrong most often |
+
+A title of the form `Artist - Album - Track` is used as-is; `Artist - Track`
+leaves the album unknown, so `Singles` is proposed. When the title has no
+artist at all, the channel name is used — for a "… - Topic" auto-upload that is
+exactly the artist. Upload decoration is stripped in both languages:
+`(Official Audio)`, `[4K]`, `(официальный клип)`, `(премьера клипа, 2002)`.
+
+Links are normalised to `watch?v=<id>`, which drops `list=` and `t=`
+parameters — otherwise yt-dlp would happily fetch an entire playlist.
+
+Filtered out: live streams, anything under 30 s or over 20 min, and
+cover/karaoke/remix versions — unless your query asks for them (`/dl … live`
+keeps live results).
+
+**Audio is never re-encoded.** With ffmpeg present the WebM/Opus stream is
+remuxed into an Ogg container (`webm>ogg` — a conditional remux, so an m4a
+download is left untouched). Without ffmpeg the format selector simply refuses
+WebM and takes m4a, because a `.webm` file has no business being in a music
+library.
+
+### When YouTube says "confirm you're not a bot"
+
+Datacentre and VPS addresses get this sooner or later, and it applies to the
+whole IP, not to one video. Two knobs, both off by default:
+
+* `YT_COOKIES_FILE` — a Netscape cookie jar exported from a logged-in browser.
+  This is yt-dlp's documented fix and the one that actually works.
+* `YT_PLAYER_CLIENTS` — e.g. `web_safari,ios`. Different extractor clients are
+  gated differently, so one of them sometimes still answers.
+
+The failure surfaces as a plain message (`youtube is unreachable: Sign in to
+confirm…`), not a traceback — nothing is written and no partial file is left.
 
 ## Tag repair
 
@@ -114,7 +215,9 @@ contains a user-facing string:
 | `tags.py` | Format-agnostic tag read/write (ID3, Vorbis, MP4) |
 | `encoding.py` | Mojibake detection and repair, with the scoring that avoids false positives |
 | `library.py` | The only module that touches the collection on disk |
-| `ingest.py` | The "a file arrived" flow, as events |
+| `ingest.py` | The "a file arrived" flow, as events; writes tags into the file |
+| `sources/` | `Source` protocol and the YouTube implementation over yt-dlp |
+| `dlservice.py` | `/dl` as a job: search → pick → fetch → hand over to ingest |
 | `tagfix.py` | Proposals and their application, plus the JSON backup |
 | `tagservice.py` | `/tags` as a job: propose → pick a source → apply |
 | `jobs.py` | Short job ids for `callback_data`, worker pool |

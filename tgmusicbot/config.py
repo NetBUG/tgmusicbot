@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,9 @@ from .errors import ConfigError
 DEFAULT_WORKERS = 2
 DEFAULT_MAX_UPLOAD_MB = 200
 DEFAULT_PROGRESS_INTERVAL_S = 3.0
+DEFAULT_SEARCH_LIMIT = 5
+DEFAULT_MIN_DURATION_S = 30
+DEFAULT_MAX_DURATION_S = 20 * 60
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +28,15 @@ class Config:
     max_upload_bytes: int = DEFAULT_MAX_UPLOAD_MB * 1024 * 1024
     progress_interval_s: float = DEFAULT_PROGRESS_INTERVAL_S
     job_ttl_s: float = 3600.0
+    search_limit: int = DEFAULT_SEARCH_LIMIT
+    min_duration_s: int = DEFAULT_MIN_DURATION_S
+    max_duration_s: int = DEFAULT_MAX_DURATION_S
+    ffmpeg_path: str | None = None
+    """Enables remuxing WebM/Opus into Ogg. Without it, m4a is taken instead."""
+    yt_cookies_file: str | None = None
+    """Netscape cookie jar. The documented cure for "confirm you're not a bot"."""
+    yt_player_clients: tuple[str, ...] = ()
+    """Override yt-dlp's extractor clients, e.g. ``web_safari,ios``."""
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "Config":
@@ -56,7 +69,29 @@ class Config:
                 env, "PROGRESS_INTERVAL_S", DEFAULT_PROGRESS_INTERVAL_S
             ),
             job_ttl_s=_positive_float(env, "JOB_TTL_S", 3600.0),
+            search_limit=_positive_int(env, "SEARCH_LIMIT", DEFAULT_SEARCH_LIMIT),
+            min_duration_s=_positive_int(
+                env, "MIN_DURATION_S", DEFAULT_MIN_DURATION_S
+            ),
+            max_duration_s=_positive_int(
+                env, "MAX_DURATION_S", DEFAULT_MAX_DURATION_S
+            ),
+            ffmpeg_path=_ffmpeg_path(env),
+            yt_cookies_file=env.get("YT_COOKIES_FILE", "").strip() or None,
+            yt_player_clients=_csv(env.get("YT_PLAYER_CLIENTS", "")),
         )
+
+
+def _csv(raw: str) -> tuple[str, ...]:
+    return tuple(part.strip() for part in raw.split(",") if part.strip())
+
+
+def _ffmpeg_path(env: Mapping[str, str]) -> str | None:
+    """Explicit setting wins; otherwise look for ffmpeg on PATH."""
+    configured = env.get("FFMPEG_PATH", "").strip()
+    if configured:
+        return configured
+    return shutil.which("ffmpeg")
 
 
 def _require(env: Mapping[str, str], name: str) -> str:

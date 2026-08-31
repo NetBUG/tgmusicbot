@@ -6,6 +6,12 @@ from tgmusicbot.errors import AlbumUnknown, ArtistUnknown, TooLarge, Unsupported
 from tgmusicbot.library import INCOMING_DIR, IngestStatus, MediaLibrary
 from tgmusicbot.tags import TrackTags
 
+def staged(root):
+    """What is left in staging; the directory may not exist at all."""
+    incoming = root / INCOMING_DIR
+    return sorted(path.name for path in incoming.iterdir()) if incoming.is_dir() else []
+
+
 TAGS = TrackTags(artist="Pink Floyd", album="The Dark Side of the Moon", title="Time", track_no=4)
 
 
@@ -75,7 +81,7 @@ def test_a_component_that_is_only_traversal_is_rejected(library, tmp_path):
 
     with pytest.raises(UnsafeName):
         ingest(library, tags=TAGS.with_(album=".."))
-    assert list((tmp_path / INCOMING_DIR).glob("*.part")) == []
+    assert staged(tmp_path) == []
 
 
 def test_missing_metadata_raises_the_specific_error(library):
@@ -93,13 +99,13 @@ def test_unsupported_extension(library):
 def test_oversized_upload_leaves_nothing_behind(library, tmp_path):
     with pytest.raises(TooLarge):
         ingest(library, b"x" * 100, max_bytes=10)
-    assert list((tmp_path / INCOMING_DIR).glob("*.part")) == []
+    assert staged(tmp_path) == []
 
 
 def test_failed_ingest_does_not_leave_a_staged_file(library, tmp_path):
     with pytest.raises(ArtistUnknown):
         ingest(library, tags=TrackTags(album="a", title="t"))
-    assert list((tmp_path / INCOMING_DIR).glob("*.part")) == []
+    assert staged(tmp_path) == []
 
 
 def test_staged_file_is_invisible_until_complete(library, tmp_path):

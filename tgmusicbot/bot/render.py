@@ -48,19 +48,27 @@ def render(event: Event) -> str:
     raise TypeError(f"unrenderable event: {event!r}")
 
 
+MAX_BUTTON_CHARS = 48
+
+
 def keyboard(question: Question):
     """Inline keyboard for a question. Payloads are ids, never text."""
     from telebot import types  # imported here so core tests need no telebot
 
     markup = types.InlineKeyboardMarkup()
     for option in question.options:
+        label = texts.t(option.key, **option.params)
         markup.add(
             types.InlineKeyboardButton(
-                texts.t(option.key, **_escaped(option.params)),
+                truncate(label, MAX_BUTTON_CHARS),
                 callback_data=encode_callback("ans", question.job_id, option.index),
             )
         )
     return markup
+
+
+def truncate(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
 def _escaped(params: dict[str, object]) -> dict[str, str]:
@@ -69,6 +77,32 @@ def _escaped(params: dict[str, object]) -> dict[str, str]:
 
 MAX_DIFF_TRACKS = 12
 _EMPTY = "—"
+
+
+def human_duration(seconds: int | None) -> str:
+    if not seconds:
+        return "?"
+    minutes, remainder = divmod(int(seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{remainder:02d}"
+    return f"{minutes}:{remainder:02d}"
+
+
+def candidate_list(candidates) -> str:
+    """Full titles in the message body; the buttons only carry a number."""
+    lines = [texts.t("dl.candidates.header", count=len(candidates))]
+    for index, candidate in enumerate(candidates, start=1):
+        details = " · ".join(
+            part
+            for part in (
+                escape(candidate.uploader) if candidate.uploader else None,
+                human_duration(candidate.duration_s),
+            )
+            if part
+        )
+        lines.append(f"{index}. {escape(candidate.title)}\n     <i>{details}</i>")
+    return "\n".join(lines)
 
 
 def proposal_table(proposal, *, limit: int = MAX_DIFF_TRACKS) -> str:

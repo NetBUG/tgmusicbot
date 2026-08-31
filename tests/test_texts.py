@@ -18,9 +18,15 @@ CORE_DIR = Path(tgmusicbot.__file__).parent
 
 
 def core_modules():
+    """Every module outside ``bot/``, packages included."""
+    import importlib.util
+
     for module in pkgutil.walk_packages([str(CORE_DIR)], prefix="tgmusicbot."):
-        if not module.name.startswith("tgmusicbot.bot"):
-            yield module.name
+        if module.name.startswith("tgmusicbot.bot"):
+            continue
+        origin = importlib.util.find_spec(module.name).origin
+        if origin and origin.endswith(".py"):
+            yield module.name, Path(origin)
 
 
 def imported_names(path: Path) -> set[str]:
@@ -41,15 +47,25 @@ def test_core_never_imports_the_text_catalogue():
     """If the core could reach ``texts``, localisation would leak out of ``bot/``."""
     offenders = [
         name
-        for name in core_modules()
+        for name, path in core_modules()
         if any(
             part.endswith("texts") or part.endswith("bot.handlers")
-            for part in imported_names(
-                CORE_DIR.parent / (name.replace(".", "/") + ".py")
-            )
+            for part in imported_names(path)
         )
     ]
     assert offenders == []
+
+
+def test_the_boundary_test_actually_sees_every_core_module():
+    """A guard that silently checks nothing is worse than no guard."""
+    names = {name for name, _ in core_modules()}
+    assert {
+        "tgmusicbot.library",
+        "tgmusicbot.ingest",
+        "tgmusicbot.dlservice",
+        "tgmusicbot.tagfix",
+        "tgmusicbot.sources.youtube",
+    } <= names
 
 
 @pytest.mark.parametrize(
@@ -112,4 +128,32 @@ def test_every_key_the_tag_flow_can_emit_has_a_string():
             "cmd.tags.usage",
         }
     )
+    assert keys <= set(texts.CATALOGUE)
+
+
+def test_every_key_the_download_flow_can_emit_has_a_string():
+    from tgmusicbot import dlservice
+
+    keys = {
+        "ask.dl.choose",
+        "ask.dl.candidate",
+        "dl.candidates.header",
+        "dl.nothing_found",
+        "cmd.dl.usage",
+        dlservice.STAGE_FETCH,
+    }
+    assert keys <= set(texts.CATALOGUE)
+
+
+def test_every_key_the_link_flow_can_emit_has_a_string():
+    from tgmusicbot import dlservice
+
+    keys = {
+        "ask.dl.confirm",
+        "ask.dl.specify_path",
+        dlservice.SAVE.key,
+        dlservice.SPECIFY.key,
+        dlservice.STAGE_INSPECT,
+        dlservice.STAGE_FETCH,
+    }
     assert keys <= set(texts.CATALOGUE)

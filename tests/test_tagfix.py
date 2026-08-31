@@ -202,3 +202,11 @@ def test_backup_file_is_not_mistaken_for_audio(album):
     (album / BACKUP_NAME).write_text("[]", encoding="utf-8")
     proposal = fixer(FakeTags()).propose(album)
     assert len(proposal.tracks) == 2
+
+
+def test_the_topic_suffix_is_proposed_for_removal(album):
+    fake = FakeTags(
+        {"01 - One of These Days.flac": TrackTags(artist="Pink Floyd - Topic")}
+    )
+    proposal = fixer(fake).propose(album)
+    assert proposal.tracks[0].changes["artist"] == ("Pink Floyd - Topic", "Pink Floyd")

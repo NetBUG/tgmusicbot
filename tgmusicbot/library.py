@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -125,6 +126,27 @@ class MediaLibrary:
             raise
         return Staged(path=temp, size=size, sha256=digest.hexdigest())
 
+    def rename_staged(self, staged: Staged, extension: str) -> Staged:
+        """Give the staged file its real extension.
+
+        mutagen sniffs by content *and* filename — an MP3 with no ID3 block
+        scores zero when the name ends in ``.part`` — so tag reading and writing
+        both want the proper suffix before anything touches the file.
+        """
+        target = staged.path.with_name(staged.path.stem + check_extension(extension))
+        if target == staged.path:
+            return staged
+        os.replace(staged.path, target)
+        return Staged(path=target, size=staged.size, sha256=staged.sha256)
+
+    def restat(self, staged: Staged) -> Staged:
+        """Re-measure a staged file that was modified in place (tags written)."""
+        return Staged(
+            path=staged.path,
+            size=staged.path.stat().st_size,
+            sha256=self.sha256(staged.path),
+        )
+
     def ingest_staged(
         self, staged: Staged, tags: TrackTags, extension: str
     ) -> IngestResult:
@@ -174,16 +196,21 @@ class MediaLibrary:
             return self.ingest_stream(handle, tags, source.suffix, max_bytes=max_bytes)
 
     def sweep_incoming(self, older_than_s: float, *, now: float | None = None) -> int:
-        """Delete abandoned staged files (a question nobody ever answered)."""
+        """Delete abandoned staging: files nobody answered a question about, and
+        working directories left behind by a download that died."""
         incoming = self.root / INCOMING_DIR
         if not incoming.is_dir():
             return 0
         now = time.time() if now is None else now
         removed = 0
-        for leftover in incoming.glob("*.part"):
-            if now - leftover.stat().st_mtime > older_than_s:
+        for leftover in incoming.iterdir():
+            if now - leftover.stat().st_mtime <= older_than_s:
+                continue
+            if leftover.is_dir():
+                shutil.rmtree(leftover, ignore_errors=True)
+            else:
                 leftover.unlink(missing_ok=True)
-                removed += 1
+            removed += 1
         return removed
 
     # -- internals ---------------------------------------------------------

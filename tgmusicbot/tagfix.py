@@ -184,14 +184,14 @@ def _tags_from_directory(directory: Path) -> TrackTags:
     parsed = naming.parse_album_dirname(directory.name)
     artist = parsed.artist or directory.parent.name
     return TrackTags(
-        artist=repair(artist).text or None,
+        artist=naming.clean_artist(repair(artist).text),
         album=repair(parsed.album).text or None,
     )
 
 
 def _repair_all(tags: TrackTags) -> TrackTags:
     return TrackTags(
-        artist=repair(tags.artist).text or None,
+        artist=naming.clean_artist(repair(tags.artist).text),
         album=repair(tags.album).text or None,
         title=repair(tags.title).text or None,
         track_no=tags.track_no,
